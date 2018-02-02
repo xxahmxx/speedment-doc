@@ -295,20 +295,14 @@ This will produce an output that starts like this:
 
 ## Aggregating Columns
 
-A common use case in analytical applications is to aggregate many results into a few. 
-This can be done very efficiently using the specialized collectors built into 
-Speedment Enterprise by leveraging the standard Java Streams API.
+A common use case in analytical applications is to aggregate many results into a few. This can be done very efficiently using the specialized collectors built into Speedment Enterprise by leveraging the standard Java Streams API.
 
-An even more efficient way to perform off-heap aggregation using Speedment is
-enabled by the AggregatorBuilder which is designed to perform all steps of the aggragation 
-with minimal heap memory footprint. 
+An even more efficient way to perform off-heap aggregation using Speedment is enabled by the AggregatorBuilder which is designed to perform all steps of the aggragation with minimal heap memory footprint. 
 
-The two methods are described in the following two sections, starting with the most efficient
-in [Aggregation using the dedicated Speedment AggregatorBuilder](#AggregatorBuilder) and then
-[Aggregation using the standard Java Streams API](#AggregationCollections) in the following section.
+The two methods are described in the following two sections, starting with the most efficient in [Aggregation using the dedicated Speedment AggregatorBuilder](#AggregatorBuilder) and then [Aggregation using the standard Java Streams API](#AggregationCollections) in the following section.
 
 ### <a name="AggregatorBuilder"></a> Aggregation using the dedicated Speedment AggregatorBuilder 
-**Requires Speedment Enterprise 1.1.12 or later.** 
+**Requires Speedment Enterprise 1.1.18 or later.** 
 In the following you will find two examples of how to use the AggregatorBuilder API for super-fast off-heap aggregation.
 
 In both examples we need an `EntityStore<X>` that holds the entities of type `X` over which the aggregation 
@@ -322,24 +316,18 @@ The entity store can be retrieved from a holder of the data store component as f
       EntityStore<Film> store = holder.getEntityStore(filmManager.getTableIdentifier());
 ```
 
-#### A simple one-step aggregation
+#### A simple aggregation
 
-In the first example we will compute the average length and sum of replacement cost of 
-all films in the database, grouped on rating and release year. To capture the data to
-be aggregated for each unique aggregate key we define an aggregator object. It has  
-
+In the first example we will compute the average length and sum of replacement cost of all films in the database, grouped on rating and release year. To capture the data to be aggregated for each unique aggregate key we define an aggregator object. It has
 * a constructor that takes a reference to an entity in an entity store
 as parameter
 * and data fields used to accumulate the aggregation results per key.
 
-The `@Data` annotation of [Project Lombok](https://projectlombok.org/) 
-generates getter for all fields, setter
-for non-final fields and a constructor that takes the final field as parameter.
+The `@Data` annotation of [Project Lombok](https://projectlombok.org/) generates getter for all fields, setter for non-final fields and a constructor that takes the final field as parameter.
 
 ```java
       @Data // See Project Lombok
       class LengthAndCost {
-          final long ref; // Included in generated constructor
           float length, replacementCost;
       }
 ```
@@ -347,107 +335,161 @@ for non-final fields and a constructor that takes the final field as parameter.
 With this class and an entity store `store` the aggregation can be expressed as follows.
 
 ```java      
-      List<LengthAndCost> aggregate = Aggregator.builder(store, LengthAndCost::new)
-          .withByteKey(Film.RATING)
-          .withByteKey(Film.RELEASE_YEAR)
-          .withAverage(Film.LENGTH, LengthAndCost::setLength)
-          .withSum(Film.REPLACEMENT_COST, LengthAndCost::setReplacementCost)
-          .build()
-          .aggregate(store.references())
-          .collect(toList());
+List<LengthAndCost> aggregate = store.entityRefStream()
+    .collect(
+        Aggregator.builder(
+                EntityRef.of(Salary.class), // This helps us get the generics right
+                LengthAndCost::new)         // How we want the results
+            .key(EntityRefUtil.ofEnum(Film.RATING))
+            .key(EntityRefUtil.ofInt(Film.RELEASE_YEAR))
+            .mean(EntityRefUtil.ofInt(Film.LENGTH), LengthAndCost::setLength)
+            .sum(EntityRefUtil.ofInt(Film.REPLACEMENT_COST), LengthAndCost::setReplacementCost)
+            .build()
+    ).collect(toList());
 ```
 
-The aggregation is collected into a list of `LengthAndCost` instances, one for each unique aggregate key in the entity store. 
-Thus, for each unique pair of rating and release year we get a `LengthAndCost` instance holding the corresponding aggregate values.
-The `ref` of a `LengthAndCost` instance points to an entity in the entity store with the key that corresponds
-to these particular aggregate values. This way, key instances are never instantiated and therefore stay off-heap for
-the full duration of the aggregation.
-
-#### Two-step aggregation
-
-Multi-step aggregation is also supported by the API. We use an aggregator class 
-with three different float fields to aggregate values for each aggregate key.
-
-```java
-      @Data // See Project Lombok
-      class Float3 {
-          final long ref; // Included in generated constructor
-          float length, replacementCost, rentalDuration;
-      }
-```
-
-Then we start out by aggregating on both rating and release year followed by an
-aggregation of those values on release year only.
+The class methods of `com.speedment.enterprise.datastore.runtime.aggregator.EntityRefUtil.*` can be imported statically to make the code a bit more readable.
 
 ```java      
-      Stream<Float3> stream = Aggregator.builder(store, Float3::new)
-          .withByteKey(Film.RATING)
-          .withByteKey(Film.RELEASE_YEAR)
-          .withSum(Film.LENGTH, Float3::setLength)
-          .withSum(Film.REPLACEMENT_COST, Float3::setReplacementCost)
-          .withSum(Film.RENTAL_DURATION, Float3::setRentalDuration)
-          .andThen(Float3::getRef, Float3::new)
-          .withByteKey(Film.RELEASE_YEAR)
-          .withAverage(Float3::getLength, Float3::setLength)
-          .withAverage(Float3::getReplacementCost, Float3::setReplacementCost)
-          .withAverage(Float3::getRentalDuration, Float3::setRentalDuration)
-          .build()
-          .aggregate(store.references());
+List<LengthAndCost> aggregate = store.entityRefStream()
+    .collect(
+        Aggregator.builder(
+                EntityRef.of(Film.class), // This helps us get the generics right
+                LengthAndCost::new)         // How we want the results
+            .key(ofEnum(Film.RATING))
+            .key(ofInt(Film.RELEASE_YEAR))
+            .mean(ofInt(Film.LENGTH), LengthAndCost::setLength)
+            .sum(ofInt(Film.REPLACEMENT_COST), LengthAndCost::setReplacementCost)
+            .build()
+    ).collect(toList());
 ```
 
-First, an inner aggregation with a 
-composite key of film rating and release year is performed, to be followed by an outer
-aggregation on release year only. 
+The aggregation is collected into a list of `LengthAndCost` instances, one for each unique aggregate key in the entity store. Thus, for each unique pair of rating and release year we get a `LengthAndCost` instance holding the corresponding aggregate values.
 
-Following the builder row by row, 
+#### Using Expressions
+Sometimes, the value that is to be aggregated is stored in one way in the database but should be used in a different way in the aggregation. Say for an example that there is a table of Salaries and that each row contains information about an employee-number, the date when that employee started and a date when the salary was last updated. To determine the average time from when an employee started to when the salary was first updated, an expression must be defined. The Speedment aggregator has a number of helper methods to make it easier to declare this kind of expressions.
 
-* the first line creates an aggregator builder which will operate
-on fields of a datastore that is supplied in the `builder` method call together with the
-constructor for the aggregation holder class (in this case `Float3`), 
+First, import the methods of this utility class:
 ```java
-Stream<Float3> stream = Aggregator.builder(store, Float3::new)`
+import static com.speedment.enterprise.aggregator.core.expression.Expressions.*;
 ```
 
-* the second and third lines define the inner aggregate key as the two fields `RATING` and
-`RELEASE_VERSION`,
+// Secondly, define a class to hold the results of the aggregation:
+
 ```java
-          .withByteKey(Film.RATING)
-          .withByteKey(Film.RELEASE_YEAR)
+@Data // Generate setters and getters with Lombok
+class DaysSinceRaise {
+    double averageDaysSinceRaise;
+    Employee.Gender gender; // Enum column
+}
 ```
 
-* then the inner aggregation operations are defined
+Then the aggregation can be defined like this:
+
 ```java
-          .withSum(Film.LENGTH, Float3::setLength)
-          .withSum(Film.REPLACEMENT_COST, Float3::setReplacementCost)
-          .withSum(Film.RENTAL_DURATION, Float3::setRentalDuration)
+List<DaysSinceRaise> aggregate = store.entityRefStream()
+    .collect(
+        Aggregator.builder(
+                EntityRef.of(Employee.class),
+                DaysSinceRaise::new)
+            .key(ofEnum(Employee.GENDER))
+            .first(ofEnum(Employee.GENDER), DaysSinceRaise::setGender)
+            .mean(
+                minusAsInt(
+                    ofInt(Employee.DATE_LAST_RAISE)
+                        .orElseGet( // Might never have gotten a raise
+                            minusAsInt(  // In that case, return -1
+                                ofInt(Employee.DATE_STARTED),
+                                1
+                            )
+                        ),
+                    ofInt(Employee.DATE_STARTED)
+                ),
+                DaysSinceRaise::setAverageDaysSinceRaise
+            )
+            .build()
+    ).collect(toList());
 ```
 
-* to be turned into a different kind of aggregation builder with the `andThen` operation.
-After this step, the builder operates on aggregation objects instead of table fields.
+Expressions is a very powerful tool to express custom fields. They are strictly type-safe and prefer primitive values of performance reasons. They also separate between nullable and non-nullable values by having two alternative interfaces for each type (for an example `ToInt` and `ToIntOrNull`). A nullable field can be converted into a non-nullable field by using any of the methods `orElse`, `orElseGet` or `orThrow()`. This is similar to how `java.util.Optional` works, except that `Optional` holds a single value where `ToInt`, `ToLong` etc represents an expression.
+
+#### Computing Correlation Coefficients
+A more advanced example of the capabilities of the aggregator is to compute Pearsson's Correlation Coefficient using the online covariance method.
+
+To compute a correlation between the salary and days employed between men and women, first define the expression and aggregator that we are going to use. This can be done statically since both these objects are immutable.
+
 ```java
-          .andThen(Float3::getRef, Float3::new)
+private final static int SECONDS_IN_A_DAY = 86_400;
+
+private final static ToInt<EntityRef<Salary>> DAYS_EMPLOYED =
+    minusAsInt(
+        ofInt(Salary.FROM_DATE).orThrow(),
+        ofInt(Salary.HIRE_DATE).orThrow()
+    ).map(days -> days / SECONDS_IN_A_DAY);
+
+private final static Aggregator<EntityRef<Salary>, ?, Result> AGGREGATOR =
+    Aggregator.builder(EntityRef.of(Salary.class), Result::new)
+        .key(ofEnum(Salary.GENDER))
+        .first(ofEnum(Salary.GENDER), Result::setGender)
+        .count(Result::setCount)
+        .mean(ofInt(Salary.SALARY), Result::setSalaryMean)
+        .mean(DAYS_EMPLOYED, Result::setDaysEmployedMean)
+        .variance(ofInt(Salary.SALARY), Result::setSalaryVariance)
+        .variance(DAYS_EMPLOYED, Result::setDaysEmployedVariance)
+        .covariance(ofInt(Salary.SALARY), DAYS_EMPLOYED, Result::setCovariance)
+        .build();
 ```
 
-* Thus, a new key can be defined for the new builder, typically a sub key of the inner
-aggregation.
+The `Result` object needs to hold a number of fields to display to the user. It is defined like this:
+
 ```java
-          .withByteKey(Film.RELEASE_YEAR)
+@Data
+private static class Result {
+    private Gender gender;
+    private long count;
+    private double salaryMean;
+    private double daysEmployedMean;
+    private double salaryVariance;
+    private double daysEmployedVariance;
+
+    @JsonIgnore
+    private double covariance;
+    private double correlation;
+}
 ```
 
-* Having defined the key, new aggregation operations can be applied
+Once these has been created, use the aggregator to collect the stream of entity references. The collector returns a new stream of result holders (the `Result` class defined above). The actual coefficient can be computed by simply mapping this stream.
+
 ```java
-          .withAverage(Float3::getLength, Float3::setLength)
-          .withAverage(Float3::getReplacementCost, Float3::setReplacementCost)
-          .withAverage(Float3::getRentalDuration, Float3::setRentalDuration)
+Map<Gender, Result> resultByGender = entityStore().entityRefStream()
+    .collect(AGGREGATOR)  // This is where all the offheap aggregations are done
+    .map(result -> {
+        if (result.salaryVariance == 0
+        ||  result.daysEmployedVariance == 0) {
+            result.setCorrelation(Double.NaN);
+        } else {
+            result.setCorrelation(
+                result.covariance / (
+                    Math.sqrt(result.salaryVariance) *
+                    Math.sqrt(result.daysEmployedVariance)
+                )
+            );
+        }
+        return result;
+    })
+    .collect(toMap(  // Use a regular java Collector to get the result as a map
+        Result::getGender,
+        Function.identity()
+    ))
 ```
 
-* and finally the builder is finalized and then supplied with the stream of references from the data store.
+Aggregator also supports parallel streams. To utilize this, simply make the stream parallel before collecting.
+
 ```java
-          .build()
-          .aggregate(store.references());
+entityStore().entityRefStream()
+    .parallel()   // Simple!
+    .collect(AGGREGATOR);
 ```
-
-### <a name="AggregationCollections"></a> Aggregation using the standard Java Streams API
 
 **Requires Speedment Enterprise 1.1.10 or later.** Aggregation can also be done using the specialized collectors built into Speedment Enterprise.
 
