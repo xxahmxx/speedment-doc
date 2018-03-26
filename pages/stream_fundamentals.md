@@ -89,7 +89,7 @@ There are also a number of *Intermediate Operations* that controls the propertie
 | `onClose`         | `Runnable`         | will run the provided `Runnable` when closed
 
 ### Map to Primitive Operations
-There are also some *Intermediate Operations* that maps a `Stream` to one of the special primitive stream types; `IntStrem`, `LongStream` and `DoubleStream`:
+There are also some *Intermediate Operations* that maps a `Stream` to one of the special primitive stream types; `IntStream`, `LongStream` and `DoubleStream`:
 
 | Operation         | Parameter          | Returns a `Stream` that:
 | :------------     | :----------------- | :----------------------------------------------------- |
